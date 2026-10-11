@@ -1,0 +1,5 @@
+# TLS termination for the VM deployment (docker-compose.prod.yml). Caddy gets
+# and renews the certificate for $DOMAIN automatically.
+{$DOMAIN} {
+	reverse_proxy app:8080
+}

@@ -1,0 +1,57 @@
+# Production overlay for a single VM (the live deployment runs this on EC2):
+#   cp .env.example .env   # then set real secrets and DOMAIN
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+#
+# Differences from the dev stack: real secrets from .env, everything restarts
+# on crash or reboot, Postgres keeps its data in a volume, and nothing is
+# published except Caddy, which terminates TLS and proxies to the app.
+x-logging: &logging
+  # Every request is a log line; cap Docker's on-disk copy so weeks of
+  # load tests can't fill the disk. /logs keeps its own in-memory ring.
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  db:
+    restart: unless-stopped
+    logging: *logging
+    ports: !reset []
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  app:
+    restart: unless-stopped
+    logging: *logging
+    ports: !reset []
+    sysctls: &backlog
+      # A stampede opens thousands of connections in the same instant; the
+      # default 4096 accept backlog overflows and drops SYNs.
+      net.core.somaxconn: 65535
+      net.ipv4.tcp_max_syn_backlog: 65535
+    environment:
+      TOKEN_SECRET: ${TOKEN_SECRET:?set TOKEN_SECRET in .env}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
+      GOMEMLIMIT: ${GOMEMLIMIT:-2GiB}
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    logging: *logging
+    sysctls: *backlog
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    ports:
+      - "${BIND_IP:-0.0.0.0}:80:80"
+      - "${BIND_IP:-0.0.0.0}:443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  caddy_data:
